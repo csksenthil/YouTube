@@ -1,0 +1,471 @@
+---
+title: "YouTube"
+author: "Senthilkumar Chandrasekaran"
+date: "9/21/2019"
+output:
+  html_document: default
+  pdf_document: default
+  word_document:
+    fig_caption: yes
+    fig_height: 5
+    fig_width: 12
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r include=FALSE}
+library(tuber)
+library(tidyverse)
+library(lubridate)
+library(stringi)
+library(wordcloud)
+library(gridExtra)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(ggrepel)
+library(tm)
+library(stopwords)
+library(wordcloud) 
+library(cluster)
+library(fpc)
+library(tidytext)
+library(tidyr)
+library(data.table)
+library(sentiment)
+library(factoextra)
+library(graph)
+```
+
+```{r}
+load(file = file.choose())
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# = videostats Plot = #
+p1 <- ggplot(data = videostats) + geom_point(aes(x = viewCount, y = likeCount))
+p2 <- ggplot(data = videostats) + geom_point(aes(x = viewCount, y = dislikeCount))
+p3 <- ggplot(data = videostats) + geom_point(aes(x = viewCount, y = commentCount))
+grid.arrange(p1, p2, p3, ncol = 2)
+```
+
+Plot to identify the posts monthwise
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+videostats$month <- lubridate::month(as.POSIXlt(videostats$date, format="%m/%d/%Y"))
+videostats$videocount <- length(title)
+
+ggplot(videostats, aes(x=lubridate::month(month, label=TRUE), y=videocount)) + 
+  geom_col(fill="darkgreen",stat="count")+
+  xlab("Month")+
+  ggtitle('Video Posts by Month') +
+theme_classic()
+
+```
+
+
+Top 10 Videos by Views
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+vp <-videostats %>%
+  top_n(10, viewCount) %>%
+  ggplot(aes(x=title, y=viewCount))+
+  geom_col(fill="blue", colour="black")+
+  geom_text(aes(label = viewCount), position = position_dodge(0.9))+
+  coord_flip() +
+  ylab("View Count") + xlab("Video Title") +
+  ylim (0,(max(videostats$viewCount)+100))+
+  theme_minimal()
+vp
+ggsave(filename = "vp_plot.png", plot = vp, width = 15)
+
+```
+
+Top 10 Videos by Likes
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+lp <-videostats %>%
+  top_n(10, likeCount) %>%
+  ggplot(aes(x=title, y=likeCount))+
+  geom_col(fill="blue", colour="black")+
+  geom_text(aes(label = likeCount), position = position_dodge(0.9))+
+  coord_flip() +
+  ylab("Like Count") + xlab("Video Title") +
+  ylim (0,(max(videostats$likeCount)+100))+
+  theme_minimal()
+lp
+ggsave(filename = "lp_plot.png", plot = lp, width = 15)
+```
+
+Videos with more dislikes
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+dp <-videostats %>%
+  top_n(5, dislikeCount) %>%
+  ggplot(aes(x=title, y=dislikeCount))+
+  geom_col(fill="blue", colour="black")+
+  geom_text(aes(label = dislikeCount), position = position_dodge(0.9))+
+  coord_flip() +
+  ylab("Dislike Count") + xlab("Video Title") +
+  ylim (0,(max(videostats$dislikeCount)+100))+
+  theme_minimal()
+dp
+ggsave(filename = "dp_plot.png", plot = dp, width = 15)
+```
+
+Engagement Metrics
+```{r echo=FALSE, message=TRUE, warning=FALSE}
+#Engagement Metrics
+
+Subs_count <- as.integer(chstat$statistics$subscriberCount)
+Like_count <- as.integer(sum(videostats$likeCount))
+Com_count <- as.integer(sum(videostats$commentCount))
+appl_rate <- round(Like_count/Subs_count,digits = 2)*100
+
+avg_eng_rate <-round((Like_count+Com_count)/Subs_count,digits=2)*100
+
+#Result Output
+message("Subscriber's Count     : ",Subs_count)
+message("Video Count            : ",chstat$statistics$videoCount)
+message("View Count             : ",sum(videostats$viewCount))
+message("Likes Count            : ",Like_count)
+message("Dislikes Count         : ",sum(videostats$dislikeCount))
+message("Comments Count         : ",Com_count)
+message("Applause Rate          : ",appl_rate)
+message("Avg. Engagement Rate % : ",avg_eng_rate)
+```
+
+
+Text Analysis of Video content
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#Pre-Processing
+
+# build a corpus, and specify the source to be character vectors
+myCorpus <- Corpus(VectorSource(videostats$title))
+
+#remove pictwitter
+
+removepictwit <- function(z) gsub("#[A-Za-z0-9]+|@[A-Za-z0-9]+|\\w+(?:\\.\\w+)*/\\S+", "", z)
+myCorpus <- tm_map(myCorpus, content_transformer(removepictwit))
+
+# convert to lower case
+myCorpus <- tm_map(myCorpus, content_transformer(tolower))
+
+# remove URLs
+removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(removeURL))
+
+# remove URLs https
+removeURL2 <- function(x) gsub("https[^[:space:]]*", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(removeURL2))
+
+# remove anything other than English letters or space
+removeNumPunct <- function(y) gsub("[^[:alpha:][:space:]]*", "", y)
+myCorpus <- tm_map(myCorpus, content_transformer(removeNumPunct))
+writeLines(as.character(myCorpus))
+
+# remove extra whitespace
+myCorpus <- tm_map(myCorpus, stripWhitespace)
+
+#Removing Numbers
+myCorpus <- tm_map(myCorpus, removeNumbers)
+
+# Remove Punctuation
+myCorpus <- tm_map(myCorpus, removePunctuation)
+
+# Remove Special Characters
+dat1 <- sapply(myCorpus, function(row) iconv(row, "latin1", "ASCII", sub=""))
+myCorpus <- Corpus(VectorSource(dat1))
+
+
+#Remove Stopwords
+myCorpus <- tm_map(myCorpus, removeWords, c(stopwords(language = "en", source = "snowball"),"â","âa","amp"))
+
+myCorpus <- tm_map(myCorpus, removeWords, c(stopwords(language = "en", source = "stopwords-iso")))
+
+
+# replace oldword with newword
+replaceWord <- function(corpus, oldword, newword) {
+tm_map(corpus, content_transformer(gsub),
+pattern=oldword, replacement=newword)
+}
+myCorpus <- replaceWord(myCorpus, "engineers", "engineer")
+myCorpus <- replaceWord(myCorpus, "engineering", "engineer")
+
+writeLines(as.character(myCorpus))
+
+#Term Document Matrix - Unstemmed
+tdm <- TermDocumentMatrix(myCorpus)
+
+#Stemming
+myCorpus1 <- tm_map(myCorpus, stemDocument)
+writeLines(as.character(myCorpus1))
+
+#Term Document Matrix - Stemmed
+tdms <- TermDocumentMatrix(myCorpus1)
+
+```
+
+Frequently Used Words
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# inspect frequent words
+
+term.freq <- rowSums(as.matrix(tdm))
+term.freq <- subset(term.freq, term.freq >= 5)
+df <- data.frame(term = names(term.freq), freq = term.freq)
+
+ggplot(df, aes(x=term, y=freq)) + geom_bar(stat="identity", fill='darkgreen') +
+  xlab("Terms") + ylab("Count") + coord_flip() +
+  theme_minimal()
+```
+
+Frequently Used words - WordCloud
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Word Clouds   
+   
+freq <- rowSums(as.matrix(tdm)) # Find word frequencies   
+dark2 <- brewer.pal(6, "Dark2")   
+wordcloud(names(freq), freq, max.words=100, rot.per=0.2, colors=dark2)
+```
+
+Hierarchial Clustering
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+### Clustering by Term Similarity
+
+### Hierarchal Clustering   
+ 
+# remove sparse terms
+tdm2 <- removeSparseTerms(tdm, sparse = 0.95)
+m2 <- as.matrix(tdm2)
+
+#Optimum Clusters
+fviz_nbclust(m2, FUN = hcut, method = "wss") + theme_classic()
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+# cluster terms
+distMatrix <- dist(scale(m2))
+fit <- hclust(distMatrix, method = "ward.D")
+plot(fit)
+rect.hclust(fit, k = 4, border = 2:5)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+fit1 <- hclust(distMatrix, method = "ward.D")
+sub_grp <- cutree(fit, k = 4)
+fviz_cluster(list(data = distMatrix, cluster = sub_grp))
+plot(silhouette(cutree(fit,4),distMatrix))
+```
+
+```{r}
+# Filter the terms used in prominent cluster #1 to find audience reactions
+sel1 <- dplyr::filter(videostats, grepl('global|model|aero|oems|customers|power', title, ignore.case = TRUE))
+
+
+#Result Output
+message("Occurrence             : ",nrow(sel1))
+message("View Count             : ",sum(sel1$viewCount))
+message("Likes Count            : ",sum(sel1$likeCount))
+message("Comments Count         : ",sum(sel1$commentCount))
+```
+
+```{r}
+# Filter the terms used in prominent cluster #1 to find audience reactions
+sel2 <- dplyr::filter(videostats, grepl('marathon|york', title, ignore.case = TRUE))
+
+
+#Result Output
+message("Occurrence             : ",nrow(sel2))
+message("View Count             : ",sum(sel2$viewCount))
+message("Likes Count            : ",sum(sel2$likeCount))
+message("Comments Count         : ",sum(sel2$commentCount))
+```
+
+K-Means Clustering
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+### K-means clustering   
+  
+#dtm2 <- removeSparseTerms(dtm, 0.95) # Prepare the data (max 5% empty space)   
+d <- dist(tdm2, method="euclidian")   
+kfit <- kmeans(d, 5)   
+clusplot(as.matrix(d), kfit$cluster, color=T, shade=T, labels=2, lines=0)
+
+```
+
+```{r}
+#Network Graph
+# transform into a term-term adjacency matrix
+m3 <- m2 %*% t(m2)
+
+library(igraph)
+# build a graph from the above matrix
+g <- graph.adjacency(m3, weighted=T, mode = "undirected")
+# remove loops
+g <- simplify(g)
+# set labels and degrees of vertices
+V(g)$label <- V(g)$name
+V(g)$degree <- degree(g)
+
+
+# plot the graph using igraph. Tkplot is interactive
+plot(g, layout=layout.fruchterman.reingold)
+tkplot(g, layout=layout.fruchterman.reingold)
+plot(g, layout = layout_with_graphopt, edge.arrow.size = 0.2)
+
+
+
+#Convert igraph to dataframe
+g1 <- get.data.frame(g, what= "both") 
+
+#Network through ggraph
+library(tidygraph)
+library(ggraph)
+
+routes_tidy <- tbl_graph(nodes = g1$vertices, edges = g1$edges, directed = FALSE)
+routes_tidy %>% 
+  activate(edges) %>% 
+  arrange(desc(weight))
+
+ggraph(routes_tidy, layout = "graphopt") + 
+  geom_node_point() +
+  geom_edge_link(aes(width = weight), alpha = 0.8, colour = "blue") + 
+  scale_edge_width(range = c(0.1, 1.5)) +
+  geom_node_text(aes(label = label), repel = TRUE) +
+  labs(edge_width = "Videos") +
+  theme_graph()
+
+library(visNetwork)
+
+visIgraph(g)
+
+```
+
+Below the Sentiment Analysis performed
+
+Sentiment Analysis Plot. Sentiment Score calculated through Sentiment library for the entire phrase
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# install package sentiment140
+
+#use the below two masked codes for first time only
+#require(devtools) 
+#install_github("okugami79/sentiment140")
+
+library(sentiment)
+sentiments <- sentiment(videostats$title)
+pol <- as.data.frame(table(sentiments$polarity))
+names(pol) <- c("Sentiment", "Score")
+
+# sentiment plot
+sentiments$score <- 0
+sentiments$score[sentiments$polarity == "positive"] <- 1
+sentiments$score[sentiments$polarity == "negative"] <- -1
+
+sentiments$date <- videostats$date
+
+#sentiments$date <- mdy(sentiments$date)
+
+
+ggplot(pol, aes(x=Sentiment, y=Score, fill=Sentiment)) +
+  geom_histogram(binwidth=1,stat="identity")+
+  theme_classic()
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+result <- aggregate(score ~ date, data = sentiments, sum)
+ggplot(data=result, aes(x=date, y=score)) + geom_line() + ylab("Total Sentiment Score") + xlab("Year")+
+  theme_minimal()
+```
+
+Two Sentiment Analysis based on Document Term Matrix
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+yt_td <- tidy(tdm)
+yt_sentiments <- yt_td %>%
+  inner_join(get_sentiments("bing"), by = c(term = "word"))
+
+yt_sentiments
+
+
+yt_sentiments %>%
+  dplyr::count(sentiment, term, wt = count) %>%
+  filter(n >= 5) %>%
+  mutate(n = ifelse(sentiment == "negative", -n, n)) %>%
+  mutate(term = reorder(term, n)) %>%
+  ggplot(aes(term, n, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  #theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ylab("Contribution to sentiment") +
+  theme_minimal()
+```
+
+Comments Analysis
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+comments_ts <- bind_rows(comments)
+comments_ts$date <- lubridate::as_date(comments_ts$publishedAt)
+comCorpus <- Corpus(VectorSource(comments_ts$textOriginal))
+comCorpus <- tm_map(comCorpus, stripWhitespace)
+comCorpus <- tm_map(comCorpus, removePunctuation)
+comCorpus <- tm_map(comCorpus, removeNumbers)
+dat2 <- sapply(comCorpus, function(row) iconv(row, "latin1", "ASCII", sub=""))
+comCorpus <- Corpus(VectorSource(dat2))
+comCorpus <- tm_map(comCorpus, removeWords, c(stopwords(language = "en", source = "snowball"),"Ã¢","Ã¢a","amp"))
+comCorpus <- tm_map(comCorpus, stemDocument)
+writeLines(as.character(comCorpus))
+tmcom <- TermDocumentMatrix(comCorpus)
+term.freq.com <- rowSums(as.matrix(tmcom))
+term.freq.com <- subset(term.freq.com, term.freq.com >= 5)
+cm <- data.frame(term = names(term.freq.com), freq = term.freq.com)
+ggplot(cm, aes(x=term, y=freq)) + geom_bar(stat="identity", fill='blue') +
+xlab("Terms") + ylab("Count") + coord_flip() +
+theme_minimal()
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+sentiments_c <- sentiment(comments_ts$textOriginal)
+pol <- as.data.frame(table(sentiments_c$polarity))
+names(pol) <- c("Sentiment", "Score")
+# sentiment plot
+sentiments_c$score <- 0
+sentiments_c$score[sentiments_c$polarity == "positive"] <- 1
+sentiments_c$score[sentiments_c$polarity == "negative"] <- -1
+sentiments_c$date <- comments_ts$date
+#sentiments$date <- mdy(sentiments$date)
+ggplot(pol, aes(x=Sentiment, y=Score, fill=Sentiment)) +
+geom_histogram(binwidth=1,stat="identity")+
+theme_classic()
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+result <- aggregate(score ~ date, data = sentiments_c, sum)
+ggplot(data=result, aes(x=date, y=score)) + geom_line() + ylab("Total Sentiment Score") + xlab("Year")+
+theme_minimal()
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ytc_td <- tidy(tmcom)
+ytc_sentiments <- ytc_td %>%
+inner_join(get_sentiments("bing"), by = c(term = "word"))
+ytc_sentiments
+ytc_sentiments %>%
+dplyr::count(sentiment, term, wt = count) %>%
+filter(n >= 5) %>%
+mutate(n = ifelse(sentiment == "negative", -n, n)) %>%
+mutate(term = reorder(term, n)) %>%
+ggplot(aes(term, n, fill = sentiment)) +
+geom_bar(stat = "identity") +
+#theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+ylab("Contribution to sentiment") +
+theme_minimal()
+```
+
